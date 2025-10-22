@@ -32,6 +32,25 @@ io.on("connection", (socket) => {
   socket.on("clear", () => {
     socket.to(roomName).emit("clear");
   });
+
+  // Mensajes de chat
+  socket.on("chat:message", (payload) => {
+    const { user, message, ts } = payload || {};
+    if (!message) return;
+
+    console.log("📨 Servidor recibió mensaje:", { roomName, user, message, ts });
+
+    // 🔥 Reenviar a TODOS (incluido el emisor)
+    io.to(roomName).emit("chat:message", { user, message, ts: ts || Date.now(), me });
+  });
+
+  socket.on("chat:join", ({ room, user }) => {
+    socket.to(room).emit("chat:system", { text: `${user} se unió`, ts: Date.now() });
+  });
+
+  socket.on("disconnect", () => {
+    console.log("⬅️ desconectado:", socket.id);
+  });
 });
 
 // ⛔ Express 5 ya no acepta "*".

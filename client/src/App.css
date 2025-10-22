@@ -79,3 +79,81 @@ button.active { outline: 2px solid #333; }
 
 /* Evitar scroll horizontal accidental en toda la app */
 html, body { overflow-x: hidden; }
+.chat {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  width: 320px;
+  max-height: 50vh;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.08);
+}
+.chat-header {
+  padding: .5rem .75rem;
+  border-bottom: 1px solid #eee;
+  font-weight: 600;
+}
+.chat-messages {
+  padding: .5rem .75rem;
+  overflow-y: auto;
+  flex: 1;
+}
+.chat-input {
+  display: flex;
+  gap: .5rem;
+  padding: .5rem .75rem;
+  border-top: 1px solid #eee;
+}
+.chat-input input {
+  flex: 1;
+  padding: .5rem .6rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+.chat-input button {
+  padding: .5rem .75rem;
+  border: 1px solid #111;
+  background: #000;
+  color: #fff;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.msg {
+  display: flex;
+  align-items: flex-end;
+  gap: .5rem;
+  margin: .35rem 0;
+  font-size: .7rem;
+}
+
+.msg.them {justify-content: flex-start; }
+.msg.me { justify-content: flex-end;  }
+.msg.system { justify-content: center; color: #666; font-style: italic; }
+
+.bubble {
+  max-width: 100%;
+  padding: .2rem .3rem;
+  border-radius: 12px;
+  line-height: 1.1rem;
+  border: 1px solid #eee;
+  background: #f7f7f7;
+  word-wrap: break-word;
+}
+.system-bubble{
+  border: 1px solid #858282;
+  background: #a5a2a2;
+ 
+}
+
+.msg.me .bubble  {
+  background: #dff1ff;
+  border-color: #c8e8ff;
+}
+ .meta {
+  font-size: .5rem;
+  opacity: .6;
+}

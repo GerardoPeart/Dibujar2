@@ -40,20 +40,25 @@ function App() {
     });
 
     socket.on("draw", ({ x0, y0, x1, y1, color, size, isEraser }) => {
-      // Pintamos lo que envió el otro usuario
-      const prevColor = ctxRef.current?.strokeStyle;
-      const prevComp = ctxRef.current?.globalCompositeOperation;
-      const prevSize = ctxRef.current?.lineWidth;
-
-      // Usamos drawSegment pero con los valores que mandó el otro
-      // Para no pisar tu herramienta local, guardamos y restauramos (aunque drawSegment ya hace save/restore)
-      drawSegmentRemote(x0, y0, x1, y1, color, size, isEraser); // <- ¡esta!
-
-
+      console.log("📥 chat:message (client):", payload);
+      drawSegmentRemote(x0, y0, x1, y1, color, size, isEraser);
     });
 
     socket.on("clear", () => {
       clearCanvas(); // cuando otro limpia, yo limpio
+    });
+
+    socket.emit("chat:join", { room: room || "global", user });
+
+    socket.on("chat:message", (payload) => {
+      console.log("📥 chat:message (client):", payload);
+      payload.me == false;
+      setMessages((msgs) => [...msgs, { ...payload, type: "msg" }]);
+    });
+
+    socket.on("chat:system", (payload) => {
+      //console.log("📥 chat:message (client):", payload);
+      setMessages((msgs) => [...msgs, { ...payload, type: "system" }]);
     });
 
     socket.on("disconnect", (reason) => {
@@ -64,6 +69,8 @@ function App() {
     return () => {
       socket.off("draw");
       socket.off("clear");
+      socket.off("chat:message");
+      socket.off("chat:system");
       socket.disconnect();
       socketRef.current = null;
     };
@@ -74,6 +81,10 @@ function App() {
   const [isEraser, setIsEraser] = useState(false);
   const drawingRef = useRef(false);
   const lastRef = useRef(null);
+  //Estado de mensajes
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState("");
+  const messagesEndRef = useRef(null);
 
   // Dibuja un segmento entre (x0,y0) -> (x1,y1)
   const drawSegment = (x0, y0, x1, y1) => {
@@ -190,7 +201,35 @@ function App() {
   }, []);
 
 
-  //
+  //Chat room
+
+  //Identidad de usuario
+  const [user] = useState(() => {
+    const n = Math.random().toString(36).slice(2, 6);
+    return `User-${n}`;
+  });
+
+
+
+  //Effecto para recibir mensajes
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  //Enviar mensaje
+  const sendMessage = () => {
+    if (newMessage.trim() === "") return;
+    const payload = { room: room || "global", user, message: newMessage, ts: Date.now(), me: true };
+
+    //setMessages((msgs) => [...msgs, { ...payload, type: "msg", me: true }]);
+    socketRef.current?.emit("chat:message", payload);
+    setNewMessage("");
+  };
+
   return (
     <div className="app">
       <header ref={headerRef} className="toolbar">
@@ -251,6 +290,47 @@ function App() {
         onTouchMove={move}
         onTouchEnd={end}
       />
+      <div className="chat">
+        <div className="chat-header">Chat — {room ? `Sala: ${room}` : "Sala: global"}</div>
+
+        <div className="chat-messages">
+          {messages.map((m, i) => {
+            const isMine = m.user === user; // comparar tu usuario local
+            const cls =
+              m.type === "system"
+                ? "msg system"
+                : `msg ${isMine ? "me" : "them"}`;
+            const time = new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+            return (
+              <div key={i} className={cls}>
+                {m.type === "system" ? (
+                  <div className="bubble system-bubble">{m.message}</div>
+                ) : (
+                  <div className="bubble-container">
+                    <div className="meta">
+                      {!isMine && <span className="user">{m.user}</span>}{" "}
+                      <span className="time">{time}</span>
+                    </div>
+                    <div className="bubble">{m.message}</div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div ref={messagesEndRef} />
+        </div>
+
+        <div className="chat-input">
+          <input
+            placeholder="Escribe un mensaje…"
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+          />
+          <button onClick={sendMessage}>Enviar</button>
+        </div>
+      </div>
     </div>
   );
 }
