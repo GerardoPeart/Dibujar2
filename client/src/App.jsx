@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import { io } from "socket.io-client";
+import { useGame } from "./game/GameProvider.jsx";
+import { useGameSocket } from "./game/useGameSocket.js";
+import GameToolbar from "./game/Components/GameToolBar.jsx";
+import GameBanner from "./game/Components/GameBanner.jsx";
+import { getEngine } from "./game/engines";
 
 function App() {
 
@@ -10,71 +15,40 @@ function App() {
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
 
+  // ----- Juego (contexto global) -----
+  const { mode, drawerId } = useGame();
+
+  // ----- Sala (room) desde la URL -----
+  const params = new URLSearchParams(location.search);
+  const room = params.get("room") || "";
+
   // socket
   const socketRef = useRef(null);
 
-  // leer sala (?room=abc) si quieres usar rooms desde ya
-  const params = new URLSearchParams(location.search);
-  let room = params.get("room");
-  if (!room) {
-    room = Math.random().toString(36).slice(2, 8); // ej: "k3f9az"
-    const url = `${location.pathname}?room=${room}`;
-    history.replaceState(null, "", url); // no recarga
-  }
+  const { socket, connected, socketId, timeLeft } = useGameSocket(room);
 
-  // estado de conexión para mostrar en UI
-  const [connected, setConnected] = useState(false);
+
 
   useEffect(() => {
-    // Si usas PROXY de Vite: sin URL
-    const socket = io({ query: { room } });
+    const s = socket.current;
+    if (!s) return;
 
-    // Si NO usas proxy, comenta la línea de arriba y usa:
-    // const socket = io("http://localhost:3000", { query: { room } });
+    const onDraw = (p) => drawSegmentRemote(p.x0, p.y0, p.x1, p.y1, p.color, p.size, p.isEraser);
+    const onClear = () => clearCanvas();
+    const onChat = (msg) => setMessages((m) => [...m, { ...msg, type: "msg" }]);
 
-    socketRef.current = socket;
-
-    socket.on("connect", () => {
-      setConnected(true);
-      console.log("✅ socket connected", socket.id);
-    });
-
-    socket.on("draw", ({ x0, y0, x1, y1, color, size, isEraser }) => {
-      console.log("📥 chat:message (client):", payload);
-      drawSegmentRemote(x0, y0, x1, y1, color, size, isEraser);
-    });
-
-    socket.on("clear", () => {
-      clearCanvas(); // cuando otro limpia, yo limpio
-    });
-
-    socket.emit("chat:join", { room: room || "global", user });
-
-    socket.on("chat:message", (payload) => {
-      console.log("📥 chat:message (client):", payload);
-      payload.me == false;
-      setMessages((msgs) => [...msgs, { ...payload, type: "msg" }]);
-    });
-
-    socket.on("chat:system", (payload) => {
-      //console.log("📥 chat:message (client):", payload);
-      setMessages((msgs) => [...msgs, { ...payload, type: "system" }]);
-    });
-
-    socket.on("disconnect", (reason) => {
-      setConnected(false);
-      console.log("❌ socket disconnected:", reason);
-    });
+    //s.emit("chat:join", { room: room || "global", user });
+    s.on("draw", onDraw);
+    s.on("clear", onClear);
+    s.on("chat:message", onChat);
 
     return () => {
-      socket.off("draw");
-      socket.off("clear");
-      socket.off("chat:message");
-      socket.off("chat:system");
-      socket.disconnect();
-      socketRef.current = null;
+      s.off("draw", onDraw);
+      s.off("clear", onClear);
+      s.off("chat:message", onChat);
     };
-  }, [room]);
+  }, [socket]);
+
 
   const [color, setColor] = useState("#000000");
   const [size, setSize] = useState(4);
@@ -87,10 +61,8 @@ function App() {
   const messagesEndRef = useRef(null);
 
   // Dibuja un segmento entre (x0,y0) -> (x1,y1)
-  const drawSegment = (x0, y0, x1, y1) => {
-    const ctx = ctxRef.current;
-    if (!ctx) return;
-
+  const drawSegmentLocal = (x0, y0, x1, y1) => {
+    const ctx = ctxRef.current; if (!ctx) return;
     ctx.save();
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
@@ -109,8 +81,8 @@ function App() {
     ctx.save();
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-    ctx.lineWidth = rSize;                         // <- usa rSize del payload
-    ctx.strokeStyle = rIsEraser ? "#ffffff" : rColor; // <- usa rColor del payload
+    ctx.lineWidth = rSize;
+    ctx.strokeStyle = rIsEraser ? "#ffffff" : rColor;
     ctx.globalCompositeOperation = rIsEraser ? "destination-out" : "source-over";
     ctx.beginPath();
     ctx.moveTo(x0, y0);
@@ -120,38 +92,38 @@ function App() {
   };
 
   // Enviar un segmento a los demás clientes
+  // emitir draw
   const emitDraw = (x0, y0, x1, y1) => {
-    const sock = socketRef.current;
-    if (!sock) return;
-    sock.emit("draw", {
-      x0, y0, x1, y1,
-      color,
-      size,
-      isEraser,
-    });
+    const s = socket.current; if (!s) return;
+    s.emit("draw", { x0, y0, x1, y1, color, size, isEraser });
+  };
+
+  // ===== Reglas de “¿puedo dibujar?” según el modo activo =====
+  const canDraw = () => {
+    if (mode !== "pictionary") return true;
+    return socketId && drawerId && socketId === drawerId; // solo el dibujante
   };
   // Convierte evento mouse/touch a coords relativas
+  // ===== Handlers de interacción =====
   const getPos = (e) => {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
+    const rect = canvasRef.current.getBoundingClientRect();
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     return { x: clientX - rect.left, y: clientY - rect.top };
   };
 
-  // Manejo de eventos de dibujo
   const start = (e) => {
+    if (!canDraw()) return;
     e.preventDefault();
     drawingRef.current = true;
     lastRef.current = getPos(e);
   };
 
   const move = (e) => {
-    if (!drawingRef.current) return;
+    if (!drawingRef.current || !canDraw()) return;
     const pos = getPos(e);
     const last = lastRef.current;
-    drawSegment(last.x, last.y, pos.x, pos.y);
-    // 🔌 Enviar este segmento a los demás
+    drawSegmentLocal(last.x, last.y, pos.x, pos.y);
     emitDraw(last.x, last.y, pos.x, pos.y);
     lastRef.current = pos;
   };
@@ -159,16 +131,14 @@ function App() {
   const end = () => {
     drawingRef.current = false;
     lastRef.current = null;
-  };
+  }
   // Función para limpiar el canvas
   const clearCanvas = () => {
-    const ctx = ctxRef.current;
-    if (!ctx) return;
+    const ctx = ctxRef.current; if (!ctx) return;
     const headerH = headerRef.current?.offsetHeight || 64;
     ctx.clearRect(0, 0, window.innerWidth, window.innerHeight - headerH);
   };
 
-  // Ajusta el tamaño del canvas al de la ventana
   const resizeCanvas = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -176,7 +146,6 @@ function App() {
     const headerH = headerRef.current?.offsetHeight || 64;
     const dpr = window.devicePixelRatio || 1;
 
-    // Usa el ancho del padre del canvas (el contenedor que lo envuelve)
     const parent = canvas.parentElement;
     const cssW = parent?.clientWidth || window.innerWidth;
     const cssH = Math.max(0, window.innerHeight - headerH);
@@ -226,70 +195,60 @@ function App() {
     const payload = { room: room || "global", user, message: newMessage, ts: Date.now(), me: true };
 
     //setMessages((msgs) => [...msgs, { ...payload, type: "msg", me: true }]);
-    socketRef.current?.emit("chat:message", payload);
+    const s = socket.current; if (!s) return;
+    s.emit("chat:message", payload);
     setNewMessage("");
   };
 
+  console.log("App render", { mode, drawerId, socketId, room });
   return (
     <div className="app">
+      {/* ===== Toolbar superior ===== */}
       <header ref={headerRef} className="toolbar">
         <div className="toolbar-inner">
           <h1>Dibujo colaborativo</h1>
+
           <div className="controls">
             <label>
               Color
-              <input type="color" defaultValue="#000000" value={color} onChange={(e) => setColor(e.target.value)} />
+              <input type="color" value={color} onChange={e => setColor(e.target.value)} />
             </label>
-
             <label>
               Grosor
-              <input type="range" min="1" max="30" defaultValue="4" value={size} onChange={(e) => setSize(e.target.value)} />
+              <input type="range" min="1" max="30" value={size} onChange={e => setSize(Number(e.target.value))} />
             </label>
 
-            <button className="active" title="Pluma" onClick={() => setIsEraser(false)}>Pluma</button>
-            <button title="Borrador" onClick={() => setIsEraser(true)}>Borrador</button>
-            <button onClick={() => { clearCanvas(); socketRef.current?.emit("clear"); }} title="Limpiar">Limpiar</button>
+            <button className={isEraser ? "" : "active"} onClick={() => setIsEraser(false)}>Pluma</button>
+            <button className={isEraser ? "active" : ""} onClick={() => setIsEraser(true)}>Borrador</button>
+
+            <button onClick={() => { clearCanvas(); socket.current?.emit("clear"); }}>Limpiar</button>
+
+            {/* === Selector de juego + acciones del modo === */}
+            <GameToolbar socket={socket} />
 
             <span className="room">
-              {connected ? "🟢 Conectado" : "🔴 Desconectado"} — {room ? `Sala: ${room}` : "Sala: global"}
+              <span className={connected ? "dot on" : "dot off"} />
+              {connected ? "Conectado" : "Desconectado"} — Sala: {room || "global"}
             </span>
-            <button
-              onClick={async () => {
-                const url = location.href;
-                await navigator.clipboard.writeText(url);
-                alert("Link copiado ✅");
-              }}
-            >
-              Copiar invitación
-            </button>
-            <button
-              onClick={() => {
-                const canvas = canvasRef.current;
-                const link = document.createElement("a");
-                link.href = canvas.toDataURL("image/png");
-                link.download = `dibujo-${Date.now()}.png`;
-                link.click();
-              }}
-            >
-              Descargar PNG
-            </button>
-
           </div>
         </div>
       </header>
 
       {/* Lienzo (aún no dibuja) */}
-      <canvas
-        ref={canvasRef}
-        className="board"
-        onMouseDown={start}
-        onMouseMove={move}
-        onMouseUp={end}
-        onMouseLeave={end}
-        onTouchStart={start}
-        onTouchMove={move}
-        onTouchEnd={end}
-      />
+      <div id="boardWrap" className="fixed left-0 right-0 bottom-0 top-[72px] bg-white">
+        <canvas
+          ref={canvasRef}
+          className="w-full h-full block bg-black"
+          onMouseDown={start}
+          onMouseMove={move}
+          onMouseUp={end}
+          onMouseLeave={end}
+          onTouchStart={start}
+          onTouchMove={move}
+          onTouchEnd={end}
+        />
+      </div>
+      <GameBanner socketId={socketId} timeLeft={timeLeft} />
       <div className="chat">
         <div className="chat-header">Chat — {room ? `Sala: ${room}` : "Sala: global"}</div>
 
